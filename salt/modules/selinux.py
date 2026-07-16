@@ -488,33 +488,19 @@ def fcontext_get_policy(
         salt '*' selinux.fcontext_get_policy my-policy
     """
     se_file_type = SeFileType.from_code(filetype) if filetype else None
-    re_spacer = "[ ]+"
-    re_optional_spacer = "[ |\t]*"
-    cmd_kwargs = {
-        "spacer": re_spacer,
-        "ospacer": re_optional_spacer,
-        "filespec": re.escape(name),
-        "sel_user": sel_user or "[^:]+",
-        "sel_role": "[^:]+",  # se_role for file context is always object_r
-        "sel_type": sel_type or "[^:]+",
-        "sel_level": sel_level or "[^:]+",
-        "filetype": (
-            "[[:alpha:] ]+" if se_file_type is None else se_file_type.description
-        ),
-    }
-    cmd = (
-        "semanage fcontext --list | grep -E "
-        + "'^{filespec}{spacer}{filetype}{spacer}{sel_user}:{sel_role}:{sel_type}:{sel_level}{ospacer}$'".format(
-            **cmd_kwargs
-        )
-    )
-    current_entry_text = __salt__["cmd.shell"](cmd, ignore_retcode=True)
-    if not current_entry_text:
-        return None
+    re_name = re.escape(name)
+    re_filetype = "[a-z ]+" if se_file_type is None else se_file_type.description
+    re_sel_user = sel_user or r"[^:\n]+"
+    re_sel_role = r"[^:\n]+"
+    re_sel_type = sel_type or r"[^:\n]+"
+    re_sel_level = sel_level or r"[^:\n]+"
 
-    if parts := re.match(
-        r"^({filespec}) +([a-z ]+) (.*)$".format(**{"filespec": re.escape(name)}),
-        current_entry_text,
+    fcontext_list = __salt__["cmd.run"]("semanage fcontext --list")
+
+    if parts := re.search(
+        fr"^({re_name}) +({re_filetype}) ({re_sel_user}:{re_sel_role}:{re_sel_type}:{re_sel_level})[ \t]*$",
+        fcontext_list,
+        flags=re.MULTILINE
     ):
         ret = {
             "filespec": parts.group(1).strip(),
@@ -522,9 +508,7 @@ def fcontext_get_policy(
         }
         ret.update(_context_string_to_dict(parts.group(3).strip()))
         return ret
-    raise CommandExecutionError(
-        "Output from the fcontext command did not match the expected format"
-    )
+    return None
 
 
 def fcontext_add_policy(
@@ -768,33 +752,17 @@ def port_get_policy(name, sel_type=None, protocol=None, port=None):
         salt '*' selinux.port_get_policy foobar protocol=tcp port=80
     """
     (protocol, port) = _parse_protocol_port(name, protocol, port)
-    re_spacer = "[ ]+"
     re_sel_type = sel_type if sel_type else r"\w+"
-    cmd_kwargs = {
-        "spacer": re_spacer,
-        "sel_type": re_sel_type,
-        "protocol": protocol,
-        "port": port,
-    }
-    cmd = (
-        "semanage port --list | grep -E "
-        + "'^{sel_type}{spacer}{protocol}{spacer}((.*)*)[ ]{port}($|,)'".format(
-            **cmd_kwargs
-        )
-    )
-    port_policy = __salt__["cmd.shell"](cmd, ignore_retcode=True)
-    if port_policy == "":
-        return None
 
-    if parts := re.match(r"^(\w+)[ ]+(\w+)[ ]+([\d\-, ]+)", port_policy):
+    port_policy = __salt__["cmd.run"]("semanage port --list")
+
+    if parts := re.search(fr"^({re_sel_type}) +({protocol})(?: +[\d-]+,)* +({port})($|,)", port_policy, flags=re.MULTILINE):
         return {
             "sel_type": parts.group(1),
             "protocol": parts.group(2),
             "port": parts.group(3).strip(),
         }
-    raise CommandExecutionError(
-        f"Port policy {port_policy} did not match expected format"
-    )
+    return None
 
 
 def port_add_policy(name, sel_type=None, protocol=None, port=None, sel_range=None):
